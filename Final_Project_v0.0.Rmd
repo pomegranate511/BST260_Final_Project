@@ -1,0 +1,383 @@
+## Final Project
+##Andrew Shapero
+
+```{r, echo = FALSE, warning = FALSE, error = FALSE, message = FALSE}
+library(tidyverse)
+library(readxl)
+library(ggthemes)
+library(broom)
+library(stringr)
+library(stringi)
+library(RColorBrewer)
+```
+
+Let's read in our biomarkers data and then our metals and covariates data. And then we can merge those two datasets.
+```{r}
+biomarkers <- read_excel ("xfr_with_inflamm.xls")
+metals <- read_excel ("XRF_results_HVELX63X.xls", sheet = 3)
+data <- left_join (biomarkers, metals, by = "sampleid")
+``` 
+
+Now let's take a look at lead levels by each standardized job title. Are certain occupations more likely to be exposed to lead?
+```{r}
+data %>% ggplot (aes (x = standard_job_title, y = PBXC, fill = standard_job_title)) +
+          geom_boxplot () +
+          theme_economist ()
+```
+
+Now let's look at CRP levels by each standardized job title. Are certain occupations more likely to show biomarkers of inflammation?
+```{r}
+data %>% ggplot (aes (x = standard_job_title, y = CRP, fill = standard_job_title)) +
+          geom_boxplot () +
+          theme_economist ()
+```
+
+Now let's look at the association between lead exposure and CRP levels. I'll also use color to show each observation's standardized job title.
+```{r}
+p<- data %>% ggplot (aes (x = PBXC , y = CRP, col = standard_job_title)) +
+          geom_point(alpha = 0.5) +
+          xlab ("Lead Exposure (ug/filter)") +
+          ylab ("C Reactive Protein Blood Concentration ") +
+          ggtitle ("The Relationship Between Lead Exposure and CRP") +
+          theme_economist()
+p
+```
+
+Now let's run a simple linear regression. This is CRP as a function of lead exposure.
+```{r, warning = FALSE}
+fit <- lm (CRP ~ PBXC, data = data, na.rm = TRUE)
+fit <- tidy(fit)
+fit
+int <- fit$estimate [1]
+m <- fit$estimate [2]
+```
+
+
+
+
+We can now add the best fir line from the simple linear regression to our graph.
+```{r}
+p + geom_abline ( intercept = int, slope = m)
+```
+
+So there's the data for one metal. We also want to account for potential confounders. However, we also want to make sure we can look at other metals in the dataset. To do that, I'm going to make a __long__ dataset instead of a __wide__ dataset. In this case, we can look at all metals at the same time.
+
+Here we convert the data into a __long__ format.
+```{r}
+tidy_data <- data %>% gather (Code, concentration, `NAXC`:`URXU`)
+```
+
+Each metal reading has a concentration and an error estimate. Let's get rid of the error estimates for now, as the actual readings are our best estimates of exposure. Each of the estimates ends in "XC". These are the data points we want to keep in our data frame.
+```{r}
+tidy_data <- tidy_data %>% filter (str_sub (Code, -2) == "XC")
+```
+
+Let's also rename the metals, so that they correspond to actual metal names. I made an Excel sheet to decipher each of the codes. Let's read that in and then translate the metal codes to the actual metal names.
+```{r, warning = FALSE}
+metal_codes <- read_csv ("metal_codes.csv")
+tidy_data <- left_join(tidy_data, metal_codes, by = "Code")
+```
+
+Now let's run a regression for every metal using the `do` function.
+```{r}
+reg <- tidy_data %>% group_by (Metal) %>%
+  do (tidy (lm (CRP ~ concentration, data = .), conf.int = TRUE))
+```
+
+Let's now filter out all the intercepts. We're not necessarily interested in those.
+```{r}
+reg <- reg %>% filter (term != "(Intercept)")
+```
+
+Now we can show the confidence intervals for each of the metals.
+```{r}
+reg %>%  ggplot (aes (x = Metal, y = estimate, ymin = conf.low, ymax = conf.high)) + 
+    geom_errorbar () +
+    geom_point () +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+The confidence interval for barium is way too wide. Let's filter that out, as it is obscuring the other confidence intervals.
+```{r}
+reg %>% filter (Metal != "Barium") %>% 
+  ggplot ( aes ( x = reorder (Metal, estimate), y = estimate, ymin = conf.low, ymax = conf.high)) +
+    geom_errorbar () +
+    geom_point () +
+    xlab ("Metal") +
+    ylab ("Regression Coefficient") +
+    ggtitle ("The Relationship Between Metals Exposures\nand Blood CRP Concentration") +
+    theme_economist () +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1)) 
+```
+
+Let's now create a color code so we can see if any of the relationships are statistically significant.
+```{r}
+reg <- reg %>% mutate (
+  sig = ifelse(conf.high < 0 , "Significant - Inversely Correlated", 
+               ifelse(conf.high >0 | conf.low <0, "Not Significant", 
+                      ifelse(conf.low > 0, "Significant - Positively Correlated" , NA)))
+)
+
+reg %>% filter (Metal != "Barium") %>% 
+  ggplot (aes (x = reorder (Metal, estimate), y = estimate, ymin = conf.low, ymax = conf.high, col = sig)) +
+    geom_errorbar () +
+    geom_point () +
+    xlab ("Metal") +
+    ylab ("Regression Coefficient") +
+    ggtitle ("The Relationship Between Metals Exposures\nand Blood CRP Concentration") +
+    theme_economist () +
+    theme (axis.text.x = element_text (angle = 90, hjust = 1)) +
+    guides (col = guide_legend (title = "Statistical Significance"))
+```
+
+Now let's apply a Bonferroni correction to account for multiple testing, given that we are looking at 51 different metals.
+```{r, warning = FALSE}
+alpha <- 0.05 / 51
+conf_level <- 1 - alpha
+reg2 <- tidy_data %>% group_by (Metal) %>%
+  do (tidy (lm (CRP ~ concentration, data = .), conf.int = TRUE, conf.level = conf_level))
+reg <- reg %>% filter (term != "(Intercept)")
+reg2 <- reg2 %>% mutate (
+  sig = ifelse(conf.high < 0 , "Significant - Inversely Correlated", 
+               ifelse(conf.high >0 | conf.low <0, "Not Significant", 
+                      ifelse(conf.low > 0, "Significant - Positively Correlated" , NA)))
+)
+
+reg2 %>% filter (Metal != "Barium") %>% 
+  ggplot ( aes ( x = reorder (Metal, estimate), y = estimate, ymin = conf.low, ymax = conf.high)) +
+    geom_errorbar () +
+    geom_point () +
+    xlab ("Metal") +
+    ylab ("Regression Coefficient") +
+    ggtitle ("The Relationship Between Metals Exposures\nand Blood CRP Concentration") +
+    theme_economist () +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+Now we need to adjust for covariates.
+
+Let's include sex, race, education, and smoking status, as these are pretty typical covariates to include in an anlaysis. Let's also include job, as this is an occupational study, and job might be associated with inflammatory biomarkers and with metals exposures. And we'll focus only on the job title and conentration variables
+```{r, warning = FALSE}
+reg <- tidy_data %>% group_by (Metal) %>%
+  do (tidy (lm (CRP ~ concentration + Gender + White + Education + Avg_cigarettes + standard_job_title , data = .,  na.rm = TRUE, conf.int = TRUE)))
+
+conc_coeffs <- reg %>% filter (term != "(Intercept)" & term != "Gendermale" & term != "Whiteyes"  & term != "Educationhigh school or GED" & term != "Educationless than high school" & term != "Avg_cigarettes" & term != "standard_job_titleDock" & term != "standard_job_titleHostler" & term != "standard_job_titleOffice")
+
+conc_coeffs <- conc_coeffs %>% mutate (
+  conf.high = estimate + qnorm(0.975) * std.error,
+  conf.low = estimate - qnorm(0.975) * std.error
+)
+
+conc_coeffs <- conc_coeffs %>% mutate (
+  sig = ifelse(conf.high < 0 , "Significant - Inversely Correlated", 
+               ifelse(conf.high >0 | conf.low <0, "Not Significant", 
+                      ifelse(conf.low > 0, "Significant - Positively Correlated" , NA)))
+)
+
+conc_coeffs  %>% filter (Metal != "Barium") %>% 
+  ggplot ( aes ( x = reorder (Metal, estimate), y = estimate, ymin = conf.low, ymax = conf.high)) +
+    geom_errorbar () +
+    geom_point () +
+    xlab ("Metal") +
+    ylab ("Regression Coefficient") +
+    ggtitle ("The Relationship Between Metals Exposures\nand Blood CRP Concentration") +
+    theme_economist () +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+Above we see that none of the relationships is statistically significant. Let's look at the job titles now.
+
+```{r}
+job_coeffs <- reg %>% filter (term == "standard_job_titleDock" | term == "standard_job_titleHostler" | term == "standard_job_titleOffice") %>% mutate (term = ifelse(term == "standard_job_titleDock", "Dock", ifelse(term == "standard_job_titleHostler", "Hostler", ifelse(term == "standard_job_titleOffice", "Office", NA))))
+
+job_coeffs <- job_coeffs %>% mutate (
+  conf.high = estimate + qnorm(0.975) * std.error,
+  conf.low = estimate - qnorm(0.975) * std.error
+)
+
+job_coeffs <- job_coeffs %>% mutate (
+  sig = ifelse(conf.high < 0 , "Significant - Inversely Correlated", 
+               ifelse(conf.high >0 | conf.low <0, "Not Significant", 
+                      ifelse(conf.low > 0, "Significant - Positively Correlated" , NA)))
+)
+
+job_coeffs  %>%
+  ggplot ( aes ( x = reorder (Metal, estimate), y = estimate, ymin = conf.low, ymax = conf.high)) +
+    geom_errorbar () +
+    geom_point () +
+    xlab ("Metal") +
+    ylab ("Regression Coefficient") +
+    ggtitle ("The Relationship Between Job Title and Blood CRP,\nControlling for Each Metal Individually") +
+    theme_economist () +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1)) + facet_grid(term~.)
+
+```
+
+Here we see no statistically significant relationships.
+
+Let's look at the RSME of our models. Even if none of the occupation or metal variables is statistically significant, we can still assess the predictive power of our model. We can use RMSE to assume the predictive power of our models. The below function can calculate RMSE.
+```{r}
+RMSE <- function(true_ratings, predicted_ratings){
+    sqrt(mean((true_ratings - predicted_ratings)^2))
+}
+```
+
+```{r}
+outputs <- data.frame (metal = rep(metal_codes$Metal, each = nrow (data) ),
+                      value = NA)
+outputs$metal <- as.character (outputs$metal)
+```
+
+```{r, warning = FALSE}
+tidy_data[is.na(tidy_data)] <- 0 
+predictions <- tidy_data %>% group_by (Metal) %>% do (augment (lm (CRP ~ concentration + Gender + White + Education + Avg_cigarettes + standard_job_title , data = .)))
+
+predictions$sampleid <- tidy_data$sampleid
+```
+
+Now that we've calculated predictions for each metal model, we can see which model best predicts CRP levels.
+
+```{r}
+metal_RMSEs <- data.frame(
+  Metal = metal_codes$Metal,
+  RMSE = NA
+)
+metal_RMSEs$Metal <- as.character (metal_RMSEs$Metal)
+```
+
+
+
+```{r}
+for( i in  1:51){
+CRP_prediction <- predictions %>% filter (Metal == metal_RMSEs[i, 1])
+CRP_actual <- tidy_data %>% filter(Metal == metal_RMSEs[i, 1])
+
+metal_RMSEs[i, 2] <- RMSE(CRP_actual$CRP, CRP_prediction$.fitted)
+}
+```
+
+Now we can see which metal model best predicts CRP.
+```{r}
+metal_RMSEs %>%
+  ggplot(aes(x=reorder(Metal, RMSE),y = RMSE)) +
+  geom_bar(stat = "identity")+
+  ggtitle ("RMSE of Each Metal Model" ) +
+  xlab ("Metal Model") +
+  theme_economist ()+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+Here we see that each metal model performs about equally well. So if we can find a model that can get a RMSE less than 1.5 this will be considerably more successful that the OLs models.
+
+```{r}
+library(MASS)
+```
+
+```{r}
+metal = metal_codes$Metal
+estimate = rep(NA, 51)
+t_stat = rep(NA, 51)
+
+metal_step = data.frame (metal, estimate, t_stat)
+```
+
+```{r}
+step_data <- tidy_data %>% filter (Metal == metal_step[i, 1])
+
+```
+
+```{r}
+is.integer0 <- function(x)
+ {
+     is.numeric(x) && length(x) == 0L
+ }
+```
+
+
+```{r, eval = FALSE}
+for(i in 16:51){
+step_data <- tidy_data %>% filter (Metal == metal_step[i, 1])
+
+step<-stepAIC(lm(CRP~., data = step_data[, c(1, 6:23, 25:101, 103:111, 116:129, 134)]),
+              scope=list(lower=as.formula(CRP ~ concentration), upper=as.formula(CRP ~ .)))
+s = summary(step)
+sc = as.data.frame(s$coefficients)
+
+sc[with(sc, order(-Estimate)), ]
+sc$variable <- rownames(sc)
+metal_step[i,2] <- ifelse(is.integer0(sc$Estimate[sc$variable == "concentration"]) == TRUE, NA, sc$Estimate[sc$variable == "concentration"])
+                          
+metal_step[i, 3] <- ifelse(is.integer0(sc$`t value`[sc$variable == "concentration"]) == TRUE, NA, sc$`t value`[sc$variable == "concentration"])
+}
+```
+
+```{r}
+metal_step <- metal_step %>% mutate (
+  std_err = estimate / t_stat,
+  upper = estimate + qnorm(0.975)*std_err,
+  lower = estimate - qnorm(0.975)*std_err
+  )
+```
+
+```{r}
+metal_step %>% filter(metal != "Barium" ) %>%
+  ggplot ( aes ( x = reorder (metal, estimate), y = estimate, ymin = lower, ymax = upper)) +
+    geom_errorbar () +
+    geom_point () +
+    xlab ("Metal") +
+    ylab ("Regression Coefficient") +
+    ggtitle ("The Relationship Between Metals Exposures\nand Blood CRP Concentration") +
+    theme_economist () +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+Now let's apply a Bonferroni correction.
+
+```{r}
+alpha <- 0.05 / 51
+z <- 1 - alpha / 2
+metal_step <- metal_step %>% mutate (
+  upper_corrected = estimate + qnorm(z)*std_err,
+  lower_corrected = estimate - qnorm(z)*std_err,
+  sig = ifelse(upper_corrected < 0 , "Significant - Inversely Correlated", 
+               ifelse(upper_corrected >0 | upper_corrected <0, "Not Significant", 
+                      ifelse(lower_corrected > 0, "Significant - Positively Correlated" , NA)))
+  )
+```
+
+
+
+
+```{r}
+metal_step <- na.omit(metal_step)
+metal_step %>% filter(metal != "Barium" ) %>% 
+  ggplot ( aes ( x = reorder (metal, estimate), y = estimate, ymin = lower_corrected, ymax = upper_corrected, col = sig  )) +
+    geom_errorbar () +
+    geom_point () +
+    xlab ("Metal") +
+    ylab ("Regression Coefficient") +
+    ggtitle ("The Relationship Between Metals Exposures\nand Blood CRP Concentration") +
+    theme_economist () +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+
+```{r, eval = FALSE}
+for(i in 1:51){
+step_data <- tidy_data %>% filter (Metal == metal_step[i, 1])
+
+step<-stepAIC(lm(CRP~., data = step_data[, c(1, 6:23, 25:101, 103:111, 116:129, 134)]),
+              scope=list(lower=as.formula(CRP ~ concentration), upper=as.formula(CRP ~ .)))
+s = summary(step)
+sc = as.data.frame(s$coefficients)
+
+sc[with(sc, order(-Estimate)), ]
+sc$variable <- rownames(sc)
+metal_step[i,2] <- sc$Estimate[sc$variable == "concentration"]
+metal_step[i, 3] <- sc$`t value`[sc$variable == "concentration"]
+}
+```
+
+
+
+

@@ -1,6 +1,41 @@
+---
+title: "Final Project"
+output: html_document
+---
+
 ## Final Project
 ##Andrew Shapero
 
+###Overview, Motivation, and Related Work
+Particulate matter is associated with a variety of health outcomes. (https://www.epa.gov/sites/production/files/2016-09/pm2.5_scale_graphic-color_2.jpg)
+
+For example Dr. Douglas Dockery's 1993 article _Association Between Air Pollution and Mortality_ demonstrated that fine particles were associated with increased mortality. Similarly, Dr. C. Arden Pope III's 1991 article _Respiratory Health and PM10 Pollution_ demonstrated that elevated levels of particulate matter with an aerodynamic diameter less than ten microns (PM_10) pollution were associated with increases in reported symptoms of respiratory disease and use of asthma medication.
+
+However, answers remain regarding the biological mechanisms in the relationship between particulate matter air pollution and adverse health outcomes. Examining the components of particulate matter might help explain this relationship.
+
+As such, it is essential to charaterize human's exposures to the different components of particulate matter.
+
+Recently, there has been increased interest in the metal components of particulate matter with an aerodynamic diameter less than 2.5 microns (PM_2.5). As such, for this study, I examined the relationship between particulate metal exposures among truckers and their biomarkers of inflammation.
+
+###Data Description
+The data used for this analysis was collected from 140 terminal-based workers from trucking terminals in Carlisle, PA and South Chicago, IL. In March 2007 and June 2007, blood samples were collected from the truckers. A health and exposure questionnaire was administered when blood was collected.
+
+Air pollution exposures were collected via PM_2.5 filters, which were then examined for metals with an energy dispersive X-ray flourescence (EDXRF) spectrometer.
+
+For this project, biomarkers and covariate data were in separate files from the exposure data. The files then had to be merged by `sampleid`. More details are available in the following sections. Not much data cleaning was required, although to examine each metal I do convert the data frame from a _wide_ to a _long_ format, as explained in later sections.
+
+###Initial Questions
+My initial question is whetherlead exposure is associated with increased C-Reactive Protein (CRP) blood levels. CRP is a biomarker of systemtic inflammation.
+
+However, I also wanted to explore the relationships between other metals exposures and CRP blood levels. As such, I explored the relationship between each of the 51 metals examined in this dataset and CRP blood levels.
+
+To avoid issues of multiple testing. I used a Bonferroni correction.
+$$
+\alpha^* = \alpha / m
+$$
+where $$m$$ is the number of tests being made.
+
+###Exploratory Analysis
 ```{r, echo = FALSE, warning = FALSE, error = FALSE, message = FALSE}
 library(tidyverse)
 library(readxl)
@@ -11,6 +46,7 @@ library(stringi)
 library(RColorBrewer)
 ```
 
+####Read In Data
 Let's read in our biomarkers data and then our metals and covariates data. And then we can merge those two datasets.
 ```{r}
 biomarkers <- read_excel ("xfr_with_inflamm.xls")
@@ -18,32 +54,48 @@ metals <- read_excel ("XRF_results_HVELX63X.xls", sheet = 3)
 data <- left_join (biomarkers, metals, by = "sampleid")
 ``` 
 
+####Single-Variable Analyses
 Now let's take a look at lead levels by each standardized job title. Are certain occupations more likely to be exposed to lead?
 ```{r}
 data %>% ggplot (aes (x = standard_job_title, y = PBXC, fill = standard_job_title)) +
           geom_boxplot () +
+          xlab ("Job Title") +
+          ylab ("Lead Exposure (ug / filter)") +
+          ggtitle ("Lead Exposure by Job Title") +
+          guides (fill = FALSE) +
           theme_economist ()
 ```
+
+It appears that office jobs likely have the lowest lead exposure. This makes sense. We shouldn't expect office works to have significant exposures.
 
 Now let's look at CRP levels by each standardized job title. Are certain occupations more likely to show biomarkers of inflammation?
 ```{r}
 data %>% ggplot (aes (x = standard_job_title, y = CRP, fill = standard_job_title)) +
           geom_boxplot () +
+          xlab ("Job Title") +
+          ylab ("CRP Blood Levels (mg / mL") +
+          ggtitle ("CRP by Job Title") +
+          guides (fill = FALSE) +
           theme_economist ()
 ```
+
+We pretty much see the opposite from the previous plot. Here we see that the office workers have the higher biomarkers of inflammation.
 
 Now let's look at the association between lead exposure and CRP levels. I'll also use color to show each observation's standardized job title.
 ```{r}
 p<- data %>% ggplot (aes (x = PBXC , y = CRP, col = standard_job_title)) +
           geom_point(alpha = 0.5) +
           xlab ("Lead Exposure (ug/filter)") +
-          ylab ("C Reactive Protein Blood Concentration ") +
+          ylab ("C Reactive Protein Blood Concentration (mg / mL)") +
           ggtitle ("The Relationship Between Lead Exposure and CRP") +
+          labs (col = "Job Title") +
           theme_economist()
 p
 ```
 
-Now let's run a simple linear regression. This is CRP as a function of lead exposure.
+From the above plot, it seems that there is an inverse relationship between lead exposure and CRP blood concentration. This is the opposite of what I expected. However, there could be confounding factors in this relationsip. For example, the workers who are generally healthier might work in more physically demanding jobs that have increased exposures. In this case of reverse causation, the healthier workers (those with lower CRP) are exposed to more pollution. 
+
+Now let's run a simple unadjusted linear regression to check if there truly is an inverse relationship between lead exposure and CRP. This is CRP as a function of lead exposure.
 ```{r, warning = FALSE}
 fit <- lm (CRP ~ PBXC, data = data, na.rm = TRUE)
 fit <- tidy(fit)
@@ -52,17 +104,16 @@ int <- fit$estimate [1]
 m <- fit$estimate [2]
 ```
 
+From the regression we see that every 1 unit increase in lead exposure is associated with a -14.5 mg/mL decrease in CRP. We can now add the best fit line from the simple linear regression to our graph.
 
-
-
-We can now add the best fir line from the simple linear regression to our graph.
 ```{r}
 p + geom_abline ( intercept = int, slope = m)
 ```
 
-So there's the data for one metal. We also want to account for potential confounders. However, we also want to make sure we can look at other metals in the dataset. To do that, I'm going to make a __long__ dataset instead of a __wide__ dataset. In this case, we can look at all metals at the same time.
+####Data Cleaning
+So there's the data for one metal. We also want to account for potential confounders. But we also want to make sure we can look at other metals in the dataset. To do that, I'm going to make a _long_ dataset instead of a _wide_ dataset. In this case, we can look at all metals at the same time.
 
-Here we convert the data into a __long__ format.
+Here we convert the data into a _long_ format.
 ```{r}
 tidy_data <- data %>% gather (Code, concentration, `NAXC`:`URXU`)
 ```
@@ -72,32 +123,25 @@ Each metal reading has a concentration and an error estimate. Let's get rid of t
 tidy_data <- tidy_data %>% filter (str_sub (Code, -2) == "XC")
 ```
 
-Let's also rename the metals, so that they correspond to actual metal names. I made an Excel sheet to decipher each of the codes. Let's read that in and then translate the metal codes to the actual metal names.
-```{r, warning = FALSE}
+Let's also rename the metals, so that they correspond to actual metal names. I made an Excel sheet to decipher each of the codes. Let's read that in and then translate the metal codes to the actual metal names. We'll then join the metal codes to the `tidy_data` data frame.
+```{r, warning = FALSE, message = FALSE}
 metal_codes <- read_csv ("metal_codes.csv")
 tidy_data <- left_join(tidy_data, metal_codes, by = "Code")
 ```
 
-Now let's run a regression for every metal using the `do` function.
+####Further Single-Variable Analyses
+Now let's run a regression for every metal using the `do` function. We're doing the same simple unadjusted regression we did earlier for lead, but now for all 51 metals.
 ```{r}
 reg <- tidy_data %>% group_by (Metal) %>%
   do (tidy (lm (CRP ~ concentration, data = .), conf.int = TRUE))
 ```
 
-Let's now filter out all the intercepts. We're not necessarily interested in those.
+The table that we just generated has estimates for the intercepts and the coefficients for 51 different regression models. Let's filter out all the intercepts. We're not necessarily interested in those.
 ```{r}
 reg <- reg %>% filter (term != "(Intercept)")
 ```
 
-Now we can show the confidence intervals for each of the metals.
-```{r}
-reg %>%  ggplot (aes (x = Metal, y = estimate, ymin = conf.low, ymax = conf.high)) + 
-    geom_errorbar () +
-    geom_point () +
-    theme(axis.text.x = element_text(angle = 90, hjust = 1))
-```
-
-The confidence interval for barium is way too wide. Let's filter that out, as it is obscuring the other confidence intervals.
+Now we can show the estimates and confidence intervals for each of the metals. But the confidence interval for barium is way too wide. Let's filter that out, as it is obscuring the other confidence intervals.
 ```{r}
 reg %>% filter (Metal != "Barium") %>% 
   ggplot ( aes ( x = reorder (Metal, estimate), y = estimate, ymin = conf.low, ymax = conf.high)) +
@@ -110,7 +154,7 @@ reg %>% filter (Metal != "Barium") %>%
     theme(axis.text.x = element_text(angle = 90, hjust = 1)) 
 ```
 
-Let's now create a color code so we can see if any of the relationships are statistically significant.
+Let's now create a color code so we can see if any of the relationships are statistically significant. This is the same plot as above but with a color code for statistical significance.
 ```{r}
 reg <- reg %>% mutate (
   sig = ifelse(conf.high < 0 , "Significant - Inversely Correlated", 
@@ -130,19 +174,29 @@ reg %>% filter (Metal != "Barium") %>%
     guides (col = guide_legend (title = "Statistical Significance"))
 ```
 
-Now let's apply a Bonferroni correction to account for multiple testing, given that we are looking at 51 different metals.
+Here we see that only lead is statistically significantly associated with CRP. But we did 51 different analyses. Generally, we use a p-value of 0.05 for statistical significane. So if there is truly no relationship, there is a 5% chance that we observe a significant relationship. When we do one test, we are willing to accept this 5% chance for what's called a _Type I error. But when we do 51 different tests, we would expect to find approximately 2.5 significant relationships even if there were truly no significant relationships. 
+
+So let's apply a Bonferroni correction to account for multiple testing, given that we are looking at 51 different metals. We'll use $$m = 51$$ since we are performing 51 different tests.
 ```{r, warning = FALSE}
+#Establish adjusted alpha and new confidence level.
 alpha <- 0.05 / 51
 conf_level <- 1 - alpha
+
+#Re-run simple unadjusted regression for each metal with the new confidence level.
 reg2 <- tidy_data %>% group_by (Metal) %>%
   do (tidy (lm (CRP ~ concentration, data = .), conf.int = TRUE, conf.level = conf_level))
+
+#Remove intercept terms.
 reg <- reg %>% filter (term != "(Intercept)")
+
+#Add indicators of significance.
 reg2 <- reg2 %>% mutate (
   sig = ifelse(conf.high < 0 , "Significant - Inversely Correlated", 
                ifelse(conf.high >0 | conf.low <0, "Not Significant", 
                       ifelse(conf.low > 0, "Significant - Positively Correlated" , NA)))
 )
 
+#Plot estimates and confidence intervals, again removing barium from the plot because its confidence intervals are very wide.
 reg2 %>% filter (Metal != "Barium") %>% 
   ggplot ( aes ( x = reorder (Metal, estimate), y = estimate, ymin = conf.low, ymax = conf.high)) +
     geom_errorbar () +
@@ -154,26 +208,32 @@ reg2 %>% filter (Metal != "Barium") %>%
     theme(axis.text.x = element_text(angle = 90, hjust = 1))
 ```
 
-Now we need to adjust for covariates.
+Now we see that none of metals are statistically significantly associated with CRP. However, we have already acknowledged that there could be confounding.
 
-Let's include sex, race, education, and smoking status, as these are pretty typical covariates to include in an anlaysis. Let's also include job, as this is an occupational study, and job might be associated with inflammatory biomarkers and with metals exposures. And we'll focus only on the job title and conentration variables
+####Adjusting for Covariates
+Let's include sex, race, education, and smoking status, as these are pretty typical covariates to include in an anlaysis. Let's also include job, as this is an occupational study, and job might be associated with inflammatory biomarkers and with metals exposures.  We'll only end up focusing on the job title and conentration variables, as we are not necessarily interested in the effects of these covariates on CRP.
 ```{r, warning = FALSE}
+#Run regression for each metal. Include covariates and job title variables this time.
 reg <- tidy_data %>% group_by (Metal) %>%
   do (tidy (lm (CRP ~ concentration + Gender + White + Education + Avg_cigarettes + standard_job_title , data = .,  na.rm = TRUE, conf.int = TRUE)))
 
+#Filter out all the intercepts and coefficients that do not correspond with the concentration term. Note that I also filter out the job title variables here. But we'll look at those later.
 conc_coeffs <- reg %>% filter (term != "(Intercept)" & term != "Gendermale" & term != "Whiteyes"  & term != "Educationhigh school or GED" & term != "Educationless than high school" & term != "Avg_cigarettes" & term != "standard_job_titleDock" & term != "standard_job_titleHostler" & term != "standard_job_titleOffice")
 
+#Add the confidence intervals.
 conc_coeffs <- conc_coeffs %>% mutate (
   conf.high = estimate + qnorm(0.975) * std.error,
   conf.low = estimate - qnorm(0.975) * std.error
 )
 
+#Add the indicators of statistical significance.
 conc_coeffs <- conc_coeffs %>% mutate (
   sig = ifelse(conf.high < 0 , "Significant - Inversely Correlated", 
                ifelse(conf.high >0 | conf.low <0, "Not Significant", 
                       ifelse(conf.low > 0, "Significant - Positively Correlated" , NA)))
 )
 
+#Plot the concentration coefficients for each metal. Again, we remove the coefficient for barium because it has a very wide confidence interval.
 conc_coeffs  %>% filter (Metal != "Barium") %>% 
   ggplot ( aes ( x = reorder (Metal, estimate), y = estimate, ymin = conf.low, ymax = conf.high)) +
     geom_errorbar () +
@@ -185,22 +245,27 @@ conc_coeffs  %>% filter (Metal != "Barium") %>%
     theme(axis.text.x = element_text(angle = 90, hjust = 1))
 ```
 
-Above we see that none of the relationships is statistically significant. Let's look at the job titles now.
+Above we see that none of the relationships is statistically significant. I hadn't accounted for multiple testing here. But obviously, given that without adjusting, we will have no statistically significant relationships after adjusting for multiple testing.
 
+Now let's look at the coefficients on the job title variables.
 ```{r}
+#We're using the same regression model as in the previous code chunk. But now we are filtering so that we only keep the job title variables.
 job_coeffs <- reg %>% filter (term == "standard_job_titleDock" | term == "standard_job_titleHostler" | term == "standard_job_titleOffice") %>% mutate (term = ifelse(term == "standard_job_titleDock", "Dock", ifelse(term == "standard_job_titleHostler", "Hostler", ifelse(term == "standard_job_titleOffice", "Office", NA))))
 
+#Add the confidence intervals.
 job_coeffs <- job_coeffs %>% mutate (
   conf.high = estimate + qnorm(0.975) * std.error,
   conf.low = estimate - qnorm(0.975) * std.error
 )
 
+#Add the indicators of statistical significance.
 job_coeffs <- job_coeffs %>% mutate (
   sig = ifelse(conf.high < 0 , "Significant - Inversely Correlated", 
                ifelse(conf.high >0 | conf.low <0, "Not Significant", 
                       ifelse(conf.low > 0, "Significant - Positively Correlated" , NA)))
 )
 
+#Plot the job title coefficients from each metal model.
 job_coeffs  %>%
   ggplot ( aes ( x = reorder (Metal, estimate), y = estimate, ymin = conf.low, ymax = conf.high)) +
     geom_errorbar () +
@@ -213,8 +278,9 @@ job_coeffs  %>%
 
 ```
 
-Here we see no statistically significant relationships.
+Here we see no statistically significant relationships.Again, I didn't account for multiple testing here because no relationships were significant in the first place.
 
+#Let off Here!
 Let's look at the RSME of our models. Even if none of the occupation or metal variables is statistically significant, we can still assess the predictive power of our model. We can use RMSE to assume the predictive power of our models. The below function can calculate RMSE.
 ```{r}
 RMSE <- function(true_ratings, predicted_ratings){
